@@ -42,7 +42,8 @@ jobs:
                 --title "House unreachable" \
                 --body "home.rkhuntjr.com didn't reach the house at $now (HTTP ${code:-none}). The Mac mini, its Wi-Fi or the tunnel is down. Leak, alarm and other phone alerts can't reach you until it's back. This closes by itself when the house answers again."
             fi
-            exit 1
+            # No failing exit: the issue is the alert, and a failed run would
+            # also email every 5 minutes.
           fi
 
       - name: Keep the schedule alive
