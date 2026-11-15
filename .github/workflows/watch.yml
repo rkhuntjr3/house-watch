@@ -1,0 +1,59 @@
+name: House watch
+
+on:
+  schedule:
+    - cron: "*/5 * * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  issues: write
+
+concurrency:
+  group: house-watch
+  cancel-in-progress: false
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    env:
+      GH_TOKEN: ${{ github.token }}
+      PROBE: https://home.rkhuntjr.com/.well-known/acme-challenge/healthprobe
+      OWNER: ${{ github.repository_owner }}
+    steps:
+      - name: Check the house
+        run: |
+          probe() { curl -s -o /dev/null -w '%{http_code}' --max-time 25 "$PROBE" || true; }
+          code=$(probe)
+          # One retry a minute later, so a restart or a blip doesn't page anyone.
+          if [ "$code" != "404" ]; then sleep 60; code=$(probe); fi
+          now=$(TZ=America/Chicago date '+%a %b %-d, %-I:%M %p')
+          open=$(gh issue list -R "$GITHUB_REPOSITORY" --label house-down --state open --json number --jq '.[0].number // empty')
+          if [ "$code" = "404" ]; then
+            echo "House answered."
+            if [ -n "$open" ]; then
+              gh issue close "$open" -R "$GITHUB_REPOSITORY" --comment "Back up at $now."
+            fi
+          else
+            echo "House did not answer (HTTP ${code:-none})."
+            if [ -z "$open" ]; then
+              gh issue create -R "$GITHUB_REPOSITORY" --label house-down --assignee "$OWNER" \
+                --title "House unreachable" \
+                --body "home.rkhuntjr.com didn't reach the house at $now (HTTP ${code:-none}). The Mac mini, its Wi-Fi or the tunnel is down. Leak, alarm and other phone alerts can't reach you until it's back. This closes by itself when the house answers again."
+            fi
+            exit 1
+          fi
+
+      - name: Keep the schedule alive
+        if: always()
+        run: |
+          git clone -q --depth 1 "https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git" repo
+          cd repo
+          month=$(date -u +%Y-%m)
+          if [ "$(cat keepalive 2>/dev/null)" != "$month" ]; then
+            echo "$month" > keepalive
+            git -c user.name="house-watch" -c user.email="house-watch@users.noreply.github.com" commit -qam "Keep the schedule alive" || \
+              { git add keepalive; git -c user.name="house-watch" -c user.email="house-watch@users.noreply.github.com" commit -qm "Keep the schedule alive"; }
+            git push -q
+          fi
